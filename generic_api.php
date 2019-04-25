@@ -343,9 +343,9 @@ function get_primary_key_from_table($mysqli,$table,$table_schema=TABLE_SCHEMA) {
 
 function has_admin_session() {
 	if ( !isset($_SESSION['a']) || $_SESSION['a'] != ADMINMODE)
-		return 0;
+		return false;
 	else
-		return 1;
+		return true;
 }
 
 function is_active_admin($user,$admins) {
