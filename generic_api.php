@@ -1,6 +1,8 @@
 <?php
 /* This MySQL rest API was designed to deal with tables having a numeric primary key present.
    It will otherwise default to use the first column of a table as key for some GET calls.
+   Licensed under GPL v3
+   Copyright (C) 2019 S Wenzler 
 */
 
 
@@ -406,7 +408,7 @@ if ($arguments != 0) {
                 201: Entry created.
                 202: Job created for processing.
                 204: Query has no results returned.
-                400: You sent a request Monitor didn't understand. Correct the input and try again.
+                400: You sent a request we didn't understand. Correct the input and try again.
                 401: You're not authenticated.
                 403: You're not authorized to do this.
                 404: The URI doesn't exist.
