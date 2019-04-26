@@ -71,7 +71,7 @@ define('ADMINMODE', 1);
 define('PRODUCT', 'Generic MySQL REST Interface');
 define('APITABLE','api_privs');
 date_default_timezone_set("Europe/Berlin");
-$admin = array("adminuser");
+$admins = array("adminuser");
 $showaccess = true;
 $message='';    
 $mysqlrowid='';
