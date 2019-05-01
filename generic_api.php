@@ -178,6 +178,19 @@ function input_array_to_mysql_set_string ($mysqli,$table,$input,$action='INSERT'
         return (array($error,$idname,$set,$bindparamstring,$bindparamarray));
 }
 
+function get_table_names_in_current_database($mysqli) {
+        $sql='SHOW TABLES';
+        $tablenames=array();
+        list ($stmt, $row, $rowcount) = get_row_results($sql,"",array(),$mysqli,"tables");
+        if ($rowcount > 0) {
+                $key=array_keys($row)[0];
+                while($stmt->fetch()) {
+			$tablenames[] = $row[$key];
+		}
+        }
+        return $tablenames;
+}
+
 function get_mysql_table_columns_as_array ($mysqli,$table,$table_schema=TABLE_SCHEMA) {
         $error=false;
         $sql='SELECT `COLUMN_NAME` FROM `INFORMATION_SCHEMA`.`COLUMNS` WHERE `TABLE_SCHEMA`=? AND `TABLE_NAME`=?';
@@ -387,9 +400,32 @@ $request = explode('/', trim($_SERVER['PATH_INFO'],'/'));
 $input = json_decode(file_get_contents('php://input'),true);
 $arguments = count($request);
 
+// Database connection
+list ($mysqli, $stmt) = database_connect();
+$tablenames=get_table_names_in_current_database($mysqli);
+
+// PHP session
+session_start();
+if (isset($_SESSION['LAST_ACTIVITY']) && (time() - $_SESSION['LAST_ACTIVITY'] > 100000)) {
+    // last request was more than 1 day ago
+    session_unset();     // unset $_SESSION variable for the run-time 
+    session_destroy();   // destroy session data in storage
+}
+$_SESSION['LAST_ACTIVITY'] = time(); // update last activity time stamp
+
+if (!isset($_SESSION['CREATED'])) {
+    $_SESSION['CREATED'] = time();
+} else if (time() - $_SESSION['CREATED'] > 3600) {
+    // session started more than 1 hours ago
+    session_regenerate_id(true);    // change session ID for the current session and invalidate old session ID
+    $_SESSION['CREATED'] = time();  // update creation time
+}
+
 // retrieve the table and key from the path
 if ($arguments != 0) {
-    $table = preg_replace('/[^a-z0-9_]+/i','',array_shift($request));
+    $table = trim(array_shift($request),'/');
+    in_array($table,$tablenames) || $table='';
+
     if (empty($table)) {
         echo "Welcome to ".sprintf("%s",PRODUCT)." REST API<br /><br />";
         echo "This API supports GET, POST, DELETE and PUT operations.<br />";
@@ -430,7 +466,6 @@ if ($arguments != 0) {
         </pre>";
         if ($showaccess) {
             echo "<br />Your table access:<br />";
-            list ($mysqli, $stmt) = database_connect();
             $sql = sprintf("SELECT * FROM `%s` WHERE ( `User` IS NULL OR `User`=? OR Host=? )",APITABLE);
             $bindparamstring="ss";
             if (isset($_SESSION['u']))
@@ -449,28 +484,11 @@ if ($arguments != 0) {
     }
 }
 if ($arguments > 1)
-    $key = preg_replace('/[^a-z0-9_]+/i','',array_shift($request));
+    $key = array_shift($request);
 else
-    $key = 0;
+    $key = null;
 
-list ($mysqli, $stmt) = database_connect();
-session_start();
-
-if (isset($_SESSION['LAST_ACTIVITY']) && (time() - $_SESSION['LAST_ACTIVITY'] > 100000)) {
-    // last request was more than 1 day ago
-    session_unset();     // unset $_SESSION variable for the run-time 
-    session_destroy();   // destroy session data in storage
-}
-$_SESSION['LAST_ACTIVITY'] = time(); // update last activity time stamp
-
-if (!isset($_SESSION['CREATED'])) {
-    $_SESSION['CREATED'] = time();
-} else if (time() - $_SESSION['CREATED'] > 3600) {
-    // session started more than 1 hours ago
-    session_regenerate_id(true);    // change session ID for the current session and invalidate old session ID
-    $_SESSION['CREATED'] = time();  // update creation time
-}
-
+// Authentication
 if (!check_api_access($mysqli,$table,$method,$_SERVER['REMOTE_ADDR'],APITABLE)) {
     if(isset($_SERVER['PHP_AUTH_USER']) && isset($_SERVER['PHP_AUTH_PW'])){
         $adServer = "ldaps://".sprintf('%s', LDAP_SERV);
@@ -509,7 +527,7 @@ if (!check_api_access($mysqli,$table,$method,$_SERVER['REMOTE_ADDR'],APITABLE))
 // create SQL based on HTTP method
 switch ($method) {
 case 'GET': 
-    if ($key) {
+    if (!empty($key)) {
         list ( $idname, $bindparamstring, ) = get_primary_key_from_table($mysqli,$table);
         (empty($idname)) && die_with_http_response_code("could not get primary key name",500,true); 
         $bindparamarray=array($key);
@@ -530,33 +548,33 @@ case 'GET':
     break;
 case 'PUT':
     $error=false;
-    is_numeric($key) || $error=true;
     if (empty($input)) die_with_http_response_code("missing or faulty json input",400,true);
+
+    list ( ,$primarykeyinputtype , ) = get_primary_key_from_table($mysqli,$table);
     list ($error,$idname,$set,$bindparamstring,$bindparamarray) = input_array_to_mysql_set_string ($mysqli,$table,$input,'UPDATE');
-    if (empty($input) || $error)
+
+    if ($error || empty($primarykeyinputtype) || empty($key))
         die_with_http_response_code("missing/invalid input",400,true);
 
     array_push($bindparamarray, $key);
-    $bindparamstring .= "i";
+    $bindparamstring .= $primarykeyinputtype;
     $sql = "UPDATE `".$table."` SET $set WHERE `".$idname."`=?";
     break;
 case 'POST':
     $error=false;
-    $uid = $key;
     $set = "";
-    // input verification
     if (empty($input)) die_with_http_response_code("missing or faulty json input",400,true);
+
     list ($error,$idname,$set,$bindparamstring,$bindparamarray) = input_array_to_mysql_set_string ($mysqli,$table,$input);
     $sql = "INSERT INTO `$table` $set";
 
-    if (empty($input) || $error)
+    if ($error)
         die_with_http_response_code("missing/invalid input",400,true);
     break;
 case 'DELETE':
     $error=false;
-    $uid = $key;
-    is_numeric($key) || $error = true;
     list ( $idname, $bindparamstring, ) = get_primary_key_from_table($mysqli,$table);
+    if (empty($key) || empty($idname) || empty($bindparamstring)) $error = true;
     $bindparamarray=array($key);
     $sql = "DELETE FROM `$table` WHERE `$idname`=?";
 
@@ -594,7 +612,7 @@ if ($method == 'GET') {
     echo '[{"message":"success","updates":"'.$mysqlrowid.'"},'.$message.']';
 }
 
-// error_log("API: ".$method." table:".$table."/".$key." input:".json_encode($input)." id:".$mysqlrowid." message:".json_encode($message)."\n", 3, "/var/www/log/api.log");
+// error_log("API: ".$method." table:".$table."/".preg_replace('/[^a-z0-9_]+/i','',$key)." input:".json_encode($input)." id:".$mysqlrowid." message:".json_encode($message)."\n", 3, "/var/www/log/api.log");
 // close mysql connection
 database_close($mysqli, $stmt);
 ?>
