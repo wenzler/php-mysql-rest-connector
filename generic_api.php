@@ -191,90 +191,103 @@ function get_mysql_table_columns_as_array ($mysqli,$table,$table_schema=TABLE_SC
         return (array($error,$columnnames));
 }
 
+function comma_string_to_verified_escaped_column_string ($validcolumnnames,$string) {
+        $output="";
+        $columnarray = explode(",", $string);
+        foreach ($columnarray as $column) {
+            if (!in_array($column,$validcolumnnames))
+                return null;
+            $output .="`".$column."`,";
+        }
+        $output=rtrim($output,",");
+        return $output;
+}
+
 function input_array_to_mysql_where_string ($mysqli,$table,$input) {
         $error=false;
         $where="";
         $options="";
+        $orderorder="";
         $idname="";
         $bindparamstring="";
         $bindparamarray=array();
+        $condition="AND";
 
-        if ( in_array("QUERY_ENABLE_EXT_COMPARISON",array_keys($input)) )
-            $extentedoperators=true;
-        else
-            $extentedoperators=false;
-
-        if ( in_array("QUERY_CONDITION",array_keys($input)) ) {
-            if ( $input['QUERY_CONDITION'] == "OR" )
-                $condition="OR";
-            else
-                $condition="AND";
-        }
                 
         list ($error, $columnnames) = get_mysql_table_columns_as_array ($mysqli,$table);
         if ( ! $error ) {
-                $idname=$columnnames[0];
+                list ( $idname, , $primarykeydetails ) = get_primary_key_from_table($mysqli,$table);
+                if ( in_array("QUERY_ENABLE_EXT_COMPARISON",array_keys($input)) )
+                    $extentedoperators=true;
+                else
+                    $extentedoperators=false;
+
+                if ( in_array("QUERY_CONDITION",array_keys($input)) ) {
+                    if ( $input['QUERY_CONDITION'] == "OR" )
+                        $condition="OR";
+                }
+                
+                if ( in_array("QUERY_LIMIT",array_keys($input)) ) {
+                    ctype_digit($input['QUERY_LIMIT']) || $error=true;
+                    $options = " LIMIT ".$input['QUERY_LIMIT'];
+                }
+
+                if ( in_array("QUERY_ORDERBYASC",array_keys($input)) ) {
+                    $orderorder=" ASC";
+                    $orderfields=$input['QUERY_ORDERBYASC'];
+                } elseif ( in_array("QUERY_ORDERBYDESC",array_keys($input)) ) {
+                    $orderorder=" DESC";
+                    $orderfields=$input['QUERY_ORDERBYDESC'];
+                }
+                if (!empty($orderorder)) {
+                    $orderbyoptions=comma_string_to_verified_escaped_column_string ($columnnames,$orderfields);
+                    if (empty($orderbyoptions))
+                        $error=true;
+                    else
+                        $options = " ORDER BY ".$orderbyoptions.$orderorder.$options;
+                }
+
+                if ( in_array("QUERY_GROUPBY",array_keys($input)) ) {
+                    $groupbyoptions=comma_string_to_verified_escaped_column_string($columnnames,$input['QUERY_GROUPBY']);
+                    if (empty($groupbyoptions))
+                        $error=true;
+                    else
+                        $options = " GROUP BY ".$groupbyoptions.$options;
+                }
+
 		foreach (array_keys($input) as $arraykey) {
-		        if (fnmatch("QUERY_*", $arraykey)) {
-                                switch ($arraykey) {
-                                        case "QUERY_CONDITION":
-                                                if ($input['QUERY_CONDITION'] == "OR")
-                                                    $condition="OR";
-                                                break;
-                                        case "QUERY_LIMIT":
-                                                ctype_digit($input['QUERY_LIMIT']) || $error=true;
-                                                $options .= " LIMIT ".$input['QUERY_LIMIT'];
-                                                break;
-                                        case "QUERY_ORDERBYASC":
-                                                in_array($input['QUERY_ORDERBYASC'],$columnnames) || $error=true;
-                                                fnmatch("*ORDER BY*", $options) && $error=true; // Just one time
-                                                $options = " ORDER BY `".$input['QUERY_ORDERBYASC']."` ASC".$options;
-                                                break;
-                                        case "QUERY_ORDERBYDESC":
-                                                in_array($input['QUERY_ORDERBYDESC'],$columnnames) || $error=true;
-                                                fnmatch("*ORDER BY*", $options) && $error=true; // Just one time
-                                                $options = " ORDER BY `".$input['QUERY_ORDERBYDESC']."` DESC".$options;
-                                                break;
-                                        case "QUERY_ENABLE_EXT_COMPARISON":
-                                                break;
-                                        case "QUERY_CONDITION":
-                                                break;
-                                        default:
-                                                $error=true;
-                                                break;
-                                }
-			} else {
-			        $operator="=";
-			        if($extentedoperators) {
-                                    if(fnmatch(">*",$input[$arraykey])) {
-                                            $operator=" > ";
-                                            $input[$arraykey]=ltrim($input[$arraykey],">");
-                                    } elseif(fnmatch("<*",$input[$arraykey])) {
-                                            $operator=" < ";
-                                            $input[$arraykey]=ltrim($input[$arraykey],"<");
-                                    } elseif(fnmatch("!*",$input[$arraykey])) {
-                                            $operator=" <> ";
-                                            $input[$arraykey]=ltrim($input[$arraykey],"!");
-                                    } elseif(fnmatch("~*",$input[$arraykey])) {
-                                            $operator=" LIKE ";
-                                            $input[$arraykey]=ltrim($input[$arraykey],"~");
-                                    } else	$operator="=";
-                                }                                
-                                
-                                if(in_array($arraykey,$columnnames)) {
-                                        $where .= $arraykey.$operator."? $condition ";
-                                        array_push($bindparamarray, $input[$arraykey]);
-                                        if (is_numeric($input[$arraykey]))
-                                                $bindparamstring .= "i";
-                                        else
-                                                $bindparamstring .= "s";
-                                } else $error=true;
-			}
+                    if (!fnmatch("QUERY_*", $arraykey)) {
+                            if($extentedoperators) {
+                                if(fnmatch(">*",$input[$arraykey])) {
+                                        $operator=" > ";
+                                        $input[$arraykey]=ltrim($input[$arraykey],">");
+                                } elseif(fnmatch("<*",$input[$arraykey])) {
+                                        $operator=" < ";
+                                        $input[$arraykey]=ltrim($input[$arraykey],"<");
+                                } elseif(fnmatch("!*",$input[$arraykey])) {
+                                        $operator=" <> ";
+                                        $input[$arraykey]=ltrim($input[$arraykey],"!");
+                                } elseif(fnmatch("~*",$input[$arraykey])) {
+                                        $operator=" LIKE ";
+                                        $input[$arraykey]=ltrim($input[$arraykey],"~");
+                                } else	$operator="=";
+                            } else $operator="=";                                
+                            
+                            if(in_array($arraykey,$columnnames)) {
+                                    $where .= $arraykey.$operator."? $condition ";
+                                    array_push($bindparamarray, $input[$arraykey]);
+                                    if (is_numeric($input[$arraykey]))
+                                            $bindparamstring .= "i";
+                                    else
+                                            $bindparamstring .= "s";
+                            } else $error=true;
+                    }
 		}
 		$where=rtrim($where," $condition ");
         } else $error=true;
         if (!empty($where)) $where = " WHERE ".$where;
         if (!empty($options)) $where .= $options;
+        $error && $where="";
         return (array($error,$idname,$where,$bindparamstring,$bindparamarray));
 }
 
@@ -385,8 +398,10 @@ if ($arguments != 0) {
         echo "<pre>
         	&columnname=value
         	&QUERY_LIMIT=integerlimit
-        	&QUERY_CONDITION=[OR|AND] default is AND; can only be used once
-        	&QUERY_ORDERBYASC=columnname OR &QUERY_ORDERBYDESC=columnname (single use only)
+        	&QUERY_CONDITION=[OR|AND] default is AND    (single use only)
+        	&QUERY_GROUPBY=columnname[,columnname]      (single use only)
+        	&QUERY_ORDERBYASC=columnname[,columnname]   (single use only)
+        	&QUERY_ORDERBYDESC=columnname[,columnname]  (single use only)
         	&QUERY_ENABLE_EXT_COMPARISON enables extra comparison operators:
                     &columnname=~value using LIKE ( % need to be url encoded as %25 )
                     &columnname=!value using <>
@@ -458,7 +473,7 @@ if (!isset($_SESSION['CREATED'])) {
 
 if (!check_api_access($mysqli,$table,$method,$_SERVER['REMOTE_ADDR'],APITABLE)) {
     if(isset($_SERVER['PHP_AUTH_USER']) && isset($_SERVER['PHP_AUTH_PW'])){
-	$adServer = "ldaps://".sprintf('%s', LDAP_SERV);
+        $adServer = "ldaps://".sprintf('%s', LDAP_SERV);
 	$ldap = ldap_connect($adServer);
 	
 	$username = strtolower($_SERVER['PHP_AUTH_USER']);
